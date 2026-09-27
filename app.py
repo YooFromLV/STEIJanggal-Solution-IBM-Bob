@@ -226,11 +226,14 @@ def build_cecep_prompt(asep_output: str) -> str:
 def _load_logo_b64(path: str) -> str:
     """
     Read an image file and return its base64-encoded data URI string.
-    Returns an empty string if the file is missing or unreadable, so
-    callers can degrade gracefully without crashing.
+    Resolves the path relative to the directory containing app.py using
+    os.path.abspath so the file is always found regardless of the working
+    directory Streamlit is launched from.
+    Returns an empty string if the file is missing or unreadable.
     """
     try:
-        with open(path, "rb") as fh:
+        abs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+        with open(abs_path, "rb") as fh:
             encoded = base64.b64encode(fh.read()).decode("utf-8")
         ext = os.path.splitext(path)[1].lstrip(".").lower()
         mime = "image/svg+xml" if ext == "svg" else f"image/{ext}"
@@ -676,17 +679,24 @@ def main() -> None:
 
     # ---- Sidebar ------------------------------------------------------------
     with st.sidebar:
-        st.markdown(
-            """
-            <div style="margin-bottom: 0px; color: var(--text-color);">
-                <h1 style="font-size: 3.5rem; margin: 0; padding: 0; line-height: 1.1;">J.A.W.I.R.</h1>
-                <p style="font-size: 1.4rem; font-weight: bold; margin: 0 0 10px 0; padding: 0;">
-                    Team <span style="-webkit-text-stroke: 1.5px #007BFF; color: transparent;">STEI</span>Janggal
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        # Adaptive sidebar logo — no leading whitespace on HTML lines to avoid
+        # Streamlit treating indented content as a Markdown code block.
+        _img_white = _load_logo_b64("assets/jawir_logo_white.png")  # white strokes -> dark mode
+        _img_black = _load_logo_b64("assets/jawir_logo_black.png")  # black strokes -> light mode
+
+        _sidebar_html = f"""<style>
+.jawir-logo-light {{ display: block; width: 100%; height: auto; }}
+.jawir-logo-dark {{ display: none; width: 100%; height: auto; }}
+@media (prefers-color-scheme: dark) {{
+.jawir-logo-light {{ display: none !important; }}
+.jawir-logo-dark {{ display: block !important; }}
+}}
+.team-title {{ font-size: 1.2rem; font-weight: 700; margin-top: -45px; margin-bottom: 16px; color: inherit; display: block; }}
+.stei-blue {{ color: #0062FF; font-weight: 800; }}
+</style>
+<div><img class="jawir-logo-light" src="{_img_black}" /><img class="jawir-logo-dark" src="{_img_white}" /><div class="team-title">Team <span class="stei-blue">STEI</span>Janggal</div></div>"""
+
+        st.sidebar.markdown(_sidebar_html, unsafe_allow_html=True)
 
         st.divider()
 
@@ -784,7 +794,7 @@ def main() -> None:
             )
 
     # ---- Main Header --------------------------------------------------------
-    st.title("J.A.W.I.R.")
+    st.title("J.A.W.I.R")
     st.markdown(
         "**Joint Agent Workflow Integrity & Reliability** | "
         "Actor-Critic Dual-Agent ETL Code Review powered by IBM watsonx.ai"
