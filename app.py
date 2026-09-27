@@ -7,6 +7,7 @@
 #   CECEP → Critic : Contract-schema Evaluation & Critical Error Preventer
 # =============================================================================
 
+import base64
 import os
 import re
 
@@ -37,18 +38,31 @@ CREDS = load_credentials()
 # ---------------------------------------------------------------------------
 
 SCHEMA_EXPECTATIONS = (
-    "STRICT RULES: "
+    "STRICT RULES:\n\n"
     "1. All numeric columns found in this dataset are critical features for downstream "
-    "Machine Learning models and MUST NOT be dropped. "
+    "Machine Learning models and MUST NOT be dropped.\n\n"
     "2. Data types must not be cast to incompatible formats (e.g., numeric to string) "
-    "without explicit fallback logic. "
-    "3. Primary identifier columns (if any) must remain intact."
+    "without explicit fallback logic.\n\n"
+    "3. Primary identifier columns (if any) must remain intact.\n\n"
+    "4. Column names are strictly immutable. Renaming ANY existing column is strictly forbidden."
 )
 
+# LINEAGE_MAP is rendered as custom HTML in the sidebar — this string is kept
+# as a fallback for the CECEP prompt builder which still references it as plain text.
 LINEAGE_MAP = (
-    "[Uploaded Dataset] -> [Target ETL Script] -> [Global Data Warehouse] "
-    "-> [Downstream ML Prediction Pipelines & Executive Dashboards]"
+    "Uploaded Dataset -> Target ETL Script -> Global Data Warehouse "
+    "-> Downstream ML Prediction Pipelines & Executive Dashboards"
 )
+
+
+_LINEAGE_MAP_HTML = """
+<div style="font-size:0.88rem;line-height:2;">
+  <div><span style="color:#39FF14;font-weight:700;">-&gt;</span> Uploaded Dataset</div>
+  <div><span style="color:#39FF14;font-weight:700;">-&gt;</span> Target ETL Script</div>
+  <div><span style="color:#39FF14;font-weight:700;">-&gt;</span> Global Data Warehouse</div>
+  <div><span style="color:#39FF14;font-weight:700;">-&gt;</span> Downstream ML Prediction Pipelines<br>&nbsp;&nbsp;&nbsp;&nbsp; &amp; Executive Dashboards</div>
+</div>
+"""
 
 # ---------------------------------------------------------------------------
 # 3. Watsonx API Helper
@@ -146,56 +160,156 @@ def process_uploaded_file(uploaded_file) -> tuple[pd.DataFrame, str]:
 
 
 def build_asep_prompt(user_request: str, data_context: str) -> str:
-    """Construct the full prompt for ASEP (Actor). Kept concise to conserve tokens."""
+    """Construct the full prompt for ASEP."""
     return (
-        "You are ASEP, a Data Engineer AI. Given the dataset context below, "
-        "generate a pandas ETL script for the user's request.\n\n"
-        "Response format (no filler text):\n"
-        "1. One-sentence PR justification.\n"
-        "2. Python code block in ```python ``` tags.\n\n"
+        "You are ASEP (Automated Script Engineering & Parser), a highly efficient Data Engineer AI. Your task is to generate a pandas ETL script based on the user request.\n\n"
+        "CRITICAL RULES:\n"
+        "1. You MUST wrap all transformation logic inside a main function explicitly named `def etl(df):` and it MUST return `df`.\n"
+        "2. Write pure pandas code only. NO SQL. NO markdown explanations outside the code block.\n"
+        "3. ZERO conversational filler. Do not write any introduction or greeting.\n"
+        "4. ZERO-TRUST COMPLIANCE: DO NOT use `.drop()`, `.dropna()`, or `.rename()`. NEVER overwrite existing column values and NEVER delete rows. If the user asks to modify or rename something, create a NEW column instead.\n\n"
+        "MANDATORY OUTPUT FORMAT:\n"
+        "Line 1: A single-sentence PR justification explaining the change.\n"
+        "Line 2 onwards: The Python code block enclosed in ```python and ``` tags.\n\n"
+        "=== DATA CONTEXT ===\n"
         f"{data_context}\n\n"
-        f"Request: {user_request}"
+        "=== USER REQUEST ===\n"
+        f"{user_request}\n\n"
+        "YOUR OUTPUT (Strictly follow the MANDATORY OUTPUT FORMAT):"
     )
 
 
 def build_cecep_prompt(asep_output: str) -> str:
     """Construct the concise prompt for CECEP (Critic), isolating ASEP's output."""
     return (
-        "You are CECEP, a Data Governance Inspector. "
-        "Review the ASEP Python pandas code against SCHEMA_EXPECTATIONS and LINEAGE_MAP.\n\n"
-        "STRICT RULE: DO NOT OUTPUT ANY SQL CODE OR SQL EQUIVALENT. "
-        "Focus ONLY on Python pandas.\n\n"
-        "Rules: REJECT if numeric columns are dropped, types are changed recklessly, "
-        "or schema rules are violated. APPROVE if code is compliant.\n\n"
-        "MANDATORY OUTPUT FORMAT (follow exactly, no deviations):\n\n"
-        "If REJECTED:\n"
+        "You are CECEP (Contract Evaluation & Critical Error Preventer), an aggressive and uncompromising Data Governance Inspector AI.\n"
+        "Your sole task is to audit the provided Python pandas code (ASEP OUTPUT) against the SCHEMA_EXPECTATIONS and LINEAGE_MAP.\n\n"
+        "CRITICAL AUDIT RULES (ZERO-TRUST POLICY):\n"
+        "1. If you see `.drop()`, `.dropna()`, or `.rename()` anywhere in the code -> IMMEDIATELY [STATUS: REJECTED].\n"
+        "2. If the code alters existing rows (filtering) or overwrites the values of existing numeric columns -> [STATUS: REJECTED].\n"
+        "3. If alphanumeric string IDs are cast to float -> [STATUS: REJECTED].\n"
+        "4. Column names are strictly immutable. Renaming ANY existing column is strictly forbidden and MUST result in a [STATUS: REJECTED] due to downstream lineage breakage.\n"
+        "5. If the code safely appends NEW columns or modifies text formats safely without breaking the schema -> [STATUS: APPROVED].\n\n"
+        "MANDATORY OUTPUT FORMAT (You MUST choose one of these exact templates):\n\n"
+        "TEMPLATE 1: IF REJECTED\n"
         "[STATUS: REJECTED]\n\n"
         "### 📄 Violating Code Snippet\n"
         "```python\n"
-        "<Copy ONLY 1-2 lines of the specific Python pandas code that causes the violation. "
-        "Do NOT rewrite or paraphrase. Do NOT output SQL.>\n"
+        "# Insert specific violating code lines here\n"
         "```\n\n"
         "### 📋 Audit Findings\n"
-        "- Risk Level: [CRITICAL / HIGH / NONE]\n"
-        "- Reason: [1 sentence]\n"
-        "- Required Action: [1 sentence]\n\n"
-        "If APPROVED:\n"
+        "- Risk Level: CRITICAL\n"
+        "- Reason: [1 sentence explaining the violation]\n"
+        "- Required Action: [1 sentence on how to fix it]\n\n"
+        "TEMPLATE 2: IF APPROVED\n"
         "[STATUS: APPROVED]\n\n"
         "### 📄 Violating Code Snippet\n"
         "No schema violations detected.\n\n"
         "### 📋 Audit Findings\n"
         "- Risk Level: NONE\n"
-        "- Reason: Code is fully compliant.\n"
+        "- Reason: Code is fully compliant with schema and lineage.\n"
         "- Required Action: None\n\n"
-        "RULE: First characters MUST be the status tag. No filler. No SQL.\n\n"
-        f"SCHEMA_EXPECTATIONS: {SCHEMA_EXPECTATIONS}\n"
-        f"LINEAGE_MAP: {LINEAGE_MAP}\n\n"
-        f"ASEP OUTPUT:\n{asep_output}"
+        "=== CONTEXT FOR AUDIT ===\n"
+        f"SCHEMA_EXPECTATIONS:\n{SCHEMA_EXPECTATIONS}\n\n"
+        f"LINEAGE_MAP:\n{LINEAGE_MAP}\n\n"
+        "=== ASEP OUTPUT TO REVIEW ===\n"
+        f"{asep_output}\n\n"
+        "FINAL INSTRUCTION: Evaluate the ASEP OUTPUT above. You MUST start your response immediately with either '[STATUS: APPROVED]' or '[STATUS: REJECTED]'. Do not output any JSON, arrays, or filler words before the status tag. Begin your audit now:"
     )
 
 
 # ---------------------------------------------------------------------------
-# 6. Response Parsers & Code Cleaner
+# 6. UI Asset Helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_logo_b64(path: str) -> str:
+    """
+    Read an image file and return its base64-encoded data URI string.
+    Returns an empty string if the file is missing or unreadable, so
+    callers can degrade gracefully without crashing.
+    """
+    try:
+        with open(path, "rb") as fh:
+            encoded = base64.b64encode(fh.read()).decode("utf-8")
+        ext = os.path.splitext(path)[1].lstrip(".").lower()
+        mime = "image/svg+xml" if ext == "svg" else f"image/{ext}"
+        return f"data:{mime};base64,{encoded}"
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def _agent_heading_html(
+    light_path: str,
+    dark_path: str,
+    short_name: str,
+    full_name: str,
+) -> str:
+    """
+    Build a self-contained HTML block for an agent header:
+      - Line 1: a <span> logo using CSS background-image (pure CSS dark/light swap
+                via @media prefers-color-scheme) placed inline before the short name.
+      - Line 2: full agent name as a muted <p> subtitle.
+
+    The logo uses background-image so transparency is preserved without <img> artefacts.
+    If both asset files are missing the logo span is omitted gracefully.
+    Each call generates unique CSS class names keyed on short_name to avoid collisions.
+    """
+    light_src = _load_logo_b64(light_path)
+    dark_src = _load_logo_b64(dark_path)
+
+    # INVERTED assignment: _dark filenames contain white strokes (visible on dark BG)
+    #                      _light filenames contain black strokes (visible on light BG)
+    # Default (light theme) -> use dark_src (black strokes on white page)
+    # @media dark           -> use light_src (white strokes on dark page)
+    _default = dark_src or light_src   # shown in light mode
+    _on_dark  = light_src or dark_src  # shown in dark mode
+
+    # Build a safe CSS identifier from the short name (e.g. "asep", "cecep")
+    css_key = re.sub(r"[^a-z0-9]", "", short_name.lower())
+
+    if _default:
+        logo_span = f'<span class="jawir-agent-logo jawir-logo-{css_key}"></span>'
+        logo_css = f"""
+.jawir-agent-logo {{
+  display: inline-block;
+  width: 1.5em;
+  height: 1.5em;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  vertical-align: middle;
+  margin-right: 8px;
+  border: none;
+  background-color: transparent;
+  flex-shrink: 0;
+}}
+.jawir-logo-{css_key} {{
+  background-image: url('{_default}');
+}}
+@media (prefers-color-scheme: dark) {{
+  .jawir-logo-{css_key} {{
+    background-image: url('{_on_dark}');
+  }}
+}}"""
+    else:
+        logo_span = ""
+        logo_css = ""
+
+    style_block = f"<style>{logo_css}</style>" if logo_css else ""
+
+    # Tight single-container layout: both lines share one wrapper with line-height 1.0
+    return (
+        f'{style_block}'
+        f'<div style="line-height:1.2; margin:0 0 20px 0; padding:0; color: var(--text-color);">'
+        f'<div style="font-size:1.5em; font-weight:bold; display:flex; align-items:center;">{logo_span}{short_name}</div>'
+        f'<div style="font-size:1.5em; font-weight:bold; margin-top:5px; color: var(--text-color);">{full_name}</div>'
+        f'</div>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Response Parsers & Code Cleaner
 # ---------------------------------------------------------------------------
 
 
@@ -306,63 +420,42 @@ _RESULT_CANDIDATES = ["processed_df", "updated_df", "result_df", "output_df", "d
 
 
 def _execute_asep_code(python_code: str, df: pd.DataFrame) -> tuple[pd.DataFrame | None, str]:
-    """
-    Extract pure Python, exec it safely, and return the transformed DataFrame.
-
-    Execution strategy:
-    1. Run _clean_python_code() to strip all markdown artefacts.
-    2. Seed the exec namespace with `df` (copy), `pd`, and common builtins.
-    3. Look for a resulting DataFrame in _RESULT_CANDIDATES (named variables).
-    4. If none found, scan for any callable defined in the code (def ...) and
-       call it with df.copy() — handles ETL scripts that wrap logic in a function.
-    5. Return (updated_df, "") on success or (None, error_message) on failure.
-    """
     clean_code = _clean_python_code(python_code)
 
-    # Provide a safe subset of builtins needed for typical pandas scripts
     safe_builtins = {
         "print": print, "range": range, "len": len, "list": list,
         "dict": dict, "str": str, "int": int, "float": float,
         "bool": bool, "enumerate": enumerate, "zip": zip,
         "min": min, "max": max, "sum": sum, "abs": abs,
-        "isinstance": isinstance, "type": type,
+        "isinstance": isinstance, "type": type, "round": round,
+        "__import__": __import__
     }
 
     exec_globals = {"pd": pd, "__builtins__": safe_builtins}
     local_ns: dict = {"df": df.copy(), "pd": pd}
 
     try:
-        exec(clean_code, exec_globals, local_ns)  # noqa: S102
+        exec(clean_code, exec_globals, local_ns)
 
-        # Strategy A: check well-known result variable names
-        for candidate in _RESULT_CANDIDATES:
-            result = local_ns.get(candidate)
-            if isinstance(result, pd.DataFrame):
-                return result, ""
-
-        # Strategy B: find any function defined by the script and call it with df
+        # Prioritas 1: Cari fungsi buatan ASEP duluan biar data CSV asli yang diproses
         for name, obj in local_ns.items():
             if callable(obj) and name not in ("pd",):
                 try:
                     result = obj(df.copy())
                     if isinstance(result, pd.DataFrame):
                         return result, ""
-                except Exception:  # noqa: BLE001
-                    pass  # Try next callable if this one fails
+                except Exception:
+                    pass
 
-        return None, (
-            "Executed code did not assign a result DataFrame. "
-            "Ensure the script assigns the output to one of: "
-            + ", ".join(f"`{c}`" for c in _RESULT_CANDIDATES)
-        )
+        # Prioritas 2: Kalau fungsi gagal, baru cari dari variabel
+        for candidate in _RESULT_CANDIDATES:
+            result = local_ns.get(candidate)
+            if isinstance(result, pd.DataFrame):
+                return result, ""
 
-    except SyntaxError as exc:
-        return None, (
-            f"SyntaxError (line {exc.lineno}): {exc.msg}. "
-            "This usually means markdown backticks were not fully stripped — "
-            "check the ASEP code panel above."
-        )
-    except Exception as exc:  # noqa: BLE001
+        return None, "Gagal menemukan hasil eksekusi dataframe."
+
+    except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
 
 
@@ -385,13 +478,13 @@ def render_split_screen(asep_raw: str, cecep_raw: str, df: pd.DataFrame | None =
     is_rejected = "[STATUS: REJECTED]" in cecep_raw
     is_approved = "[STATUS: APPROVED]" in cecep_raw
 
-    # Strip status tags from body text — banner carries the status visually
-    audit_text = (
+    # Strip status tags and collapse excessive blank lines from CECEP's raw output
+    audit_text = re.sub(
+        r"\n{3,}", "\n\n",
         cecep_raw
         .replace("[STATUS: REJECTED]", "")
         .replace("[STATUS: APPROVED]", "")
-        .strip()
-    )
+    ).strip()
 
     # Extract only the violating snippet section from CECEP's response
     violating_snippet = _extract_violating_snippet(cecep_raw)
@@ -399,7 +492,12 @@ def render_split_screen(asep_raw: str, cecep_raw: str, df: pd.DataFrame | None =
     # --- Left Column: ASEP (Actor) ---
     with col1:
         with st.container(border=True):
-            st.markdown("### [ASEP] Automated Script Engineering & Parser")
+            asep_heading = _agent_heading_html(
+                "assets/asep_light.png", "assets/asep_dark.png",
+                short_name="ASEP",
+                full_name="Automated Script Engineering & Parser",
+            )
+            st.markdown(asep_heading, unsafe_allow_html=True)
 
             # PR Justification block
             st.info(pr_justification if pr_justification else "*(No justification returned)*")
@@ -413,7 +511,12 @@ def render_split_screen(asep_raw: str, cecep_raw: str, df: pd.DataFrame | None =
     # --- Right Column: CECEP (Critic) ---
     with col2:
         with st.container(border=True):
-            st.markdown("### [CECEP] Contract Evaluation & Error Preventer")
+            cecep_heading = _agent_heading_html(
+                "assets/cecep_light.png", "assets/cecep_dark.png",
+                short_name="CECEP",
+                full_name="Contract Evaluation & Error Preventer",
+            )
+            st.markdown(cecep_heading, unsafe_allow_html=True)
 
             # 1. Status banner — formal, enterprise style
             if is_rejected:
@@ -424,7 +527,7 @@ def render_split_screen(asep_raw: str, cecep_raw: str, df: pd.DataFrame | None =
                 st.warning("CECEP returned an unrecognised status. Raw output shown below.")
 
             # 2. Flagged Code Snippet
-            st.caption("📄 Flagged Code Snippet:")
+            st.caption("Flagged Code Snippet:")
             if is_approved:
                 st.code("No schema violations detected.", language="text")
             else:
@@ -437,7 +540,7 @@ def render_split_screen(asep_raw: str, cecep_raw: str, df: pd.DataFrame | None =
                 st.code(display_snippet, language="python")
 
             # 3. CECEP's full audit response — copyable text block
-            st.caption("📋 CECEP Responses:")
+            st.caption("CECEP Responses:")
             st.code(audit_text if audit_text else "(No audit text returned)", language="text")
 
     # --- Post-review: Execute & Download (APPROVED path only) ---
@@ -455,7 +558,7 @@ def render_split_screen(asep_raw: str, cecep_raw: str, df: pd.DataFrame | None =
             # On failure: updated_df stays as df.copy() — no red error banner shown
 
         with st.container(border=True):
-            st.subheader("🎉 Applied Modification Preview")
+            st.subheader("Applied Modification Preview")
 
             if exec_succeeded:
                 st.success("Script executed successfully against the uploaded dataset.")
@@ -469,17 +572,71 @@ def render_split_screen(asep_raw: str, cecep_raw: str, df: pd.DataFrame | None =
             # Preview and download are always rendered when APPROVED
             st.dataframe(updated_df.head(), use_container_width=True)
 
-            st.download_button(
-                label="📥 Download Updated Dataset (.csv)",
-                data=updated_df.to_csv(index=False).encode("utf-8"),
-                file_name="updated_dataset.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+            # Unified export gate: banner + download button share one themed container
+            with st.container():
+                st.markdown(
+                    """
+<style>
+.jawir-export-banner {
+  background-color: #0a1f0a;
+  border: 1px solid #39FF14;
+  border-radius: 8px 8px 0 0;
+  padding: 12px 16px;
+  margin-top: 12px;
+  margin-bottom: 0;
+  font-family: 'Courier New', Courier, monospace;
+}
+.jawir-export-prefix {
+  color: #39FF14;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  display: block;
+  margin-bottom: 2px;
+  opacity: 0.7;
+}
+.jawir-export-msg {
+  color: #39FF14;
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+/* Target the download button rendered immediately after this banner */
+div[data-testid="stDownloadButton"] > button {
+  border: 1px solid #1b5e20 !important;
+  border-radius: 8px !important;
+  color: #ffffff !important;
+  background-color: #2e7d32 !important;
+  font-family: 'Courier New', Courier, monospace !important;
+  font-weight: 600 !important;
+  width: 100%;
+  margin-top: 10px;
+  transition: all 0.3s ease;
+}
+div[data-testid="stDownloadButton"] > button:hover {
+  background-color: #1b5e20 !important;
+  border-color: #39FF14 !important;
+}
+</style>
+<div class="jawir-export-banner">
+  <span class="jawir-export-prefix">[ JAWIR GOVERNANCE GATE: PASSED ]</span>
+  <span class="jawir-export-msg">AI-Reviewed Output Ready for Export</span>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+                st.download_button(
+                    label="Download AI-Reviewed Dataset (.csv)",
+                    data=updated_df.to_csv(index=False).encode("utf-8"),
+                    file_name="updated_dataset.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 
     elif is_rejected:
         # Governance gate blocked execution — do not run the code
-        st.warning("⚠️ Script execution blocked due to governance violations.")
+        st.warning("Script execution blocked due to governance violations.")
 
 
 # ---------------------------------------------------------------------------
@@ -519,30 +676,112 @@ def main() -> None:
 
     # ---- Sidebar ------------------------------------------------------------
     with st.sidebar:
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/5/51/IBM_logo.svg",
-            width=80,
+        st.markdown(
+            """
+            <div style="margin-bottom: 0px; color: var(--text-color);">
+                <h1 style="font-size: 3.5rem; margin: 0; padding: 0; line-height: 1.1;">J.A.W.I.R.</h1>
+                <p style="font-size: 1.4rem; font-weight: bold; margin: 0 0 10px 0; padding: 0;">
+                    Team <span style="-webkit-text-stroke: 1.5px #007BFF; color: transparent;">STEI</span>Janggal
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-        st.title("J.A.W.I.R. Control Panel")
-        st.markdown("**Team STEIJanggal**")
-        st.markdown("---")
 
-        # Watsonx connection status
-        st.markdown("#### Watsonx Connection")
+        st.divider()
+
+        # --- Box 1 (static): System always online once the app is running ----
+        st.markdown(
+    """
+<div style="background-color:#1b5e20; border: 1px solid #39FF14; border-radius:8px; padding:10px 14px; margin-bottom:10px;">
+  <span style="font-size:0.82rem; font-weight:700; color:#39FF14; letter-spacing:0.02em;">
+    System Status: Securely Connected to IBM watsonx.ai Enterprise Network
+  </span>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+        # --- Box 2 (dynamic): probe Watsonx API with a lightweight credentials check
+        # Attempt a minimal API initialisation; success = connected, exception = disconnected
+        watsonx_ok = False
         if CREDS["api_key"] and CREDS["project_id"]:
-            st.success("Credentials loaded")
-        else:
-            st.warning("Credentials missing in .env!")
+            try:
+                from ibm_watsonx_ai.foundation_models import ModelInference  # noqa: PLC0415
+                ModelInference(
+                    model_id=MODEL_CECEP,
+                    credentials={"url": CREDS["url"], "apikey": CREDS["api_key"]},
+                    project_id=CREDS["project_id"],
+                )
+                watsonx_ok = True
+            except Exception:  # noqa: BLE001
+                watsonx_ok = False
 
-        st.markdown(f"**Endpoint:** `{CREDS['url']}`")
-        st.markdown("---")
+        api_bg   = "transparent" if watsonx_ok else "transparent"
+        api_text = "#39FF14" if watsonx_ok else "#ff5252"
+        api_label = "Watsonx API: Connected" if watsonx_ok else "Watsonx API: Disconnected"
 
-        # Active governance contract summary
-        st.markdown("#### Active Governance Contract")
-        with st.expander("View SCHEMA_EXPECTATIONS", expanded=False):
-            st.markdown(SCHEMA_EXPECTATIONS)
-        with st.expander("View LINEAGE_MAP", expanded=False):
-            st.markdown(LINEAGE_MAP)
+        st.markdown(
+            f"""
+<style>
+.jawir-dot-tegas {{
+  display: inline-block;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background-color: {api_text};
+  vertical-align: middle;
+  margin-right: 10px;
+}}
+</style>
+<div style="background-color:{api_bg}; border: 1px solid {api_text}; border-radius:8px; padding:10px 14px; margin-bottom:4px;">
+  <span class="jawir-dot-tegas"></span>
+  <span style="font-size:0.82rem;font-weight:700;color:{api_text};letter-spacing:0.02em;">
+    {api_label}
+  </span>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        st.divider()
+
+        # --- Governance contract panels — card-styled expanders --------------
+        st.markdown("#### Active Data Governance")
+
+        # Shared card wrapper injected once; expander content floats inside it
+        st.markdown(
+            """
+<style>
+.jawir-gov-card {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 8px;
+  font-size: 0.88rem;
+  line-height: 1.7;
+  transition: all 0.3s ease-in-out;
+}
+.jawir-gov-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 12px rgba(57, 255, 20, 0.15);
+  border-color: #39FF14;
+}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
+
+        with st.expander("Schema Rules & Expectations", expanded=False):
+            st.markdown(
+                f'<div class="jawir-gov-card">{SCHEMA_EXPECTATIONS}</div>',
+                unsafe_allow_html=True,
+            )
+        with st.expander("Data Lineage Map", expanded=False):
+            st.markdown(
+                f'<div class="jawir-gov-card">{_LINEAGE_MAP_HTML}</div>',
+                unsafe_allow_html=True,
+            )
 
     # ---- Main Header --------------------------------------------------------
     st.title("J.A.W.I.R.")
@@ -571,7 +810,7 @@ def main() -> None:
         st.session_state.uploaded_df = df
 
         st.success(f"{uploaded_file.name} loaded — {df.shape[0]} rows x {df.shape[1]} columns")
-        st.markdown("**Data Preview (first 5 rows):**")
+        st.markdown("**Data Preview:**")
         st.dataframe(df.head(5), use_container_width=True)
 
         with st.expander("Full Column Profile", expanded=False):
